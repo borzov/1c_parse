@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Отчет: Взаимодействие Контрагентов v6.1</title> {# Версия обновлена #}
+    <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@latest/css/pico.min.css">
+    <style>
+        body { font-family: sans-serif; padding-bottom: 50px; font-size: 0.9em; }
+        .container { max-width: 97%; margin: auto; padding: 15px; }
+        #filtersContainer { background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 5px; padding: 15px 20px; margin-bottom: 1.5em; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px 25px; }
+        .filter-group legend { font-weight: bold; margin-bottom: 10px; font-size: 1.05em; display: block; }
+        .filter-group label { display: block; margin-bottom: 6px; font-weight: normal; cursor: pointer; }
+        .filter-group input[type="checkbox"], .filter-group input[type="radio"] { margin-right: 7px; vertical-align: middle; transform: scale(1.1); }
+        .dataTables_wrapper .dataTables_filter input { padding: 0.4em; border: 1px solid #ccc; border-radius: 4px; background-color: white; }
+        .dataTables_info, .dataTables_filter { margin-bottom: 1em; }
+        table.dataTable { width: 100% !important; border-collapse: collapse !important; table-layout: fixed; border: 1px solid #e0e0e0; }
+        table.dataTable th, table.dataTable td { border: 1px solid #e0e0e0; padding: 7px 10px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }
+        table.dataTable th:first-child, table.dataTable td:first-child { text-align: left; width: 33%; white-space: normal; vertical-align: top; }
+        table.dataTable th { background-color: #f5f5f5; vertical-align: bottom; border-bottom: 2px solid #bdbdbd; font-weight: 600; }
+        table.dataTable tbody tr:nth-child(odd) { background-color: #fafafa; }
+        table.dataTable tbody tr:hover { background-color: #f0f0f0; }
+        .interaction-cell { font-size: 1.7em; font-weight: bold; cursor: default; }
+        .income { color: #388e3c; } .expense { color: #d32f2f; } .both { color: #1976d2; }
+        .no-data { font-style: italic; color: #757575; }
+        .cp-details-small { font-size: 0.85em; color: #424242; display: block; margin-top: 3px; white-space: normal; }
+        .legend { line-height: 1.8; margin-top: 1.5rem; border-top: 1px solid #eee; padding-top: 1rem; }
+        .legend span { display: inline-block; width: 1.5em; text-align: center; margin-right: 5px;}
+        .cp-name-display { font-weight: bold; }
+    </style>
+</head>
+<body>
+<main class="container">
+    <h1>Отчет: Взаимодействие Контрагентов с Организациями</h1>
+    <p>Дата формирования: {{ generation_time }}</p>
+
+    <!-- Блок Фильтров -->
+     <div id="filtersContainer">
+         <fieldset class="filter-group">
+             <legend>Орг. форма:</legend>
+             <label><input type="checkbox" class="filter-checkbox" name="legalForm" value="ALL" checked> Все</label>
+             {% for form in legal_forms %}
+             <label><input type="checkbox" class="filter-checkbox" name="legalForm" value="{{ form }}"> {{ form }}</label>
+             {% endfor %}
+         </fieldset>
+         <fieldset class="filter-group">
+             <legend>Тип операций:</legend>
+             <label><input type="checkbox" class="filter-checkbox" name="hasIncome" value="1" checked> Был приход</label>
+             <label><input type="checkbox" class="filter-checkbox" name="hasExpense" value="1" checked> Был расход</label>
+         </fieldset>
+         <fieldset class="filter-group">
+             <legend>Работал только с:</legend>
+             <label><input type="radio" class="filter-radio" name="onlyWithOrg" value="" checked> Не важно</label>
+             {% for org_name in our_org_names %}
+             <label><input type="radio" class="filter-radio" name="onlyWithOrg" value="{{ org_name | e }}"> Только {{ org_name }}</label>
+             {% endfor %}
+         </fieldset>
+     </div>
+
+    {% if not comparison_data %}
+         <p>Нет данных о взаимодействии.</p>
+    {% else %}
+        <div id="comparisonTable_wrapper" class="dataTables_wrapper no-footer">
+            <table id="comparisonTable" class="display compact" style="width:100%">
+                <thead>
+                    <tr>
+                        <th>Контрагент</th>
+                        {% for org_name in our_org_names %}
+                        <th>{{ org_name }}</th>
+                        {% endfor %}
+                    </tr>
+                </thead>
+                <tbody>
+                    {# Цикл генерации строк таблицы #}
+                    {% for cp_id, cp_entry in comparison_data.items() %}
+                        {% set details = cp_entry.details %}
+                        {% set cp_norm_name = details.name_normalized %}
+                        {% set cp_legal_form = details.legal_form %}
+                        {% set cp_inn = details.inn %}
+                        {% set cp_accs = details.accounts_str %}
+                        {% set cp_raw_names = details.raw_names_str %}
+                        {% if details.display_name %}
+                            {% set display_name = details.display_name %}
+                            {% if cp_legal_form == 'ИП' %} {% set display_name = 'ИП ' + display_name %} {% endif %}
+                        {% else %}
+                            {% set display_name = cp_norm_name %}
+                            {% if cp_legal_form == 'ИП' %} {% set display_name = 'ИП ' + format_fio_display(cp_norm_name) %}
+                            {% elif cp_legal_form == 'ООО' %} {% set display_name = 'ООО "' + cp_norm_name + '"' %}
+                            {% elif cp_legal_form == 'АО' %} {% set display_name = 'АО "' + cp_norm_name + '"' %}
+                            {% elif cp_legal_form == 'ГОС' %} {% set display_name = cp_norm_name %}
+                            {% elif cp_legal_form == 'ФЛ' or cp_legal_form == 'ИП/ФЛ' %} {% set display_name = format_fio_display(cp_norm_name) %}
+                            {% elif cp_norm_name != "?" and cp_legal_form not in ['ДРУГОЕ', 'ЮЛ'] %}
+                                {% set is_likely_fio = '.' in cp_norm_name or cp_norm_name.count(' ') >= 1 %}
+                                {% if is_likely_fio %}
+                                    {% set display_name = cp_legal_form + ' ' + cp_norm_name %}
+                                {% else %}
+                                    {% set display_name = cp_legal_form + ' "' + cp_norm_name + '"' %}
+                                {% endif %}
+                            {% endif %}
+                        {% endif %}
+                        {% set has_income_flag = 'true' if details.has_income else 'false' %}
+                        {% set has_expense_flag = 'true' if details.has_expense else 'false' %}
+                        {% set interacted_orgs_str = details.interacted_orgs | sort | join(',') %}
+
+                        <tr data-legal-form="{{ cp_legal_form | e }}"
+                            data-has-income="{{ has_income_flag }}"
+                            data-has-expense="{{ has_expense_flag }}"
+                            data-interacted-orgs="{{ interacted_orgs_str | e }}">
+                            <td>
+                                <span class="cp-name-display" title="{{ cp_raw_names | e }}">{{ display_name | safe }}</span>
+                                <span class="cp-details-small">({% if cp_inn %}ИНН: {{ cp_inn | e }}{% else %}<span class="no-data">(не указ.)</span>{% endif %}{% if cp_accs %}, Счета: {{ cp_accs | e }}{% endif %})</span>
+                            </td>
+                            {% for org_name in our_org_names %}
+                                {% set interaction = cp_entry.interactions.get(org_name) %}
+                                {% set cell_content = '–' %}{% set cell_class = '' %}{% set title_text = org_name + ': Нет операций' %}
+                                {% if interaction %}
+                                    {% set types = interaction.types %}
+                                    {% set tooltip_lines = [org_name + ':'] %}
+                                    {% if 'income' in types %} {% set _ = tooltip_lines.append('  Приход: ' + interaction.income_count|string + ' шт, ' + format_currency(interaction.income_sum) + ' руб.') %} {% endif %}
+                                    {% if 'expense' in types %} {% set _ = tooltip_lines.append('  Расход: ' + interaction.expense_count|string + ' шт, ' + format_currency(interaction.expense_sum) + ' руб.') %} {% endif %}
+                                    {% set title_text = tooltip_lines | join('\n') %}
+                                    {% set cell_class = "interaction-cell" %}
+                                    {% if 'income' in types and 'expense' in types %} {% set cell_content = '↕' %}{% set cell_class = cell_class + " both" %}
+                                    {% elif 'income' in types %} {% set cell_content = '↓' %}{% set cell_class = cell_class + " income" %}
+                                    {% elif 'expense' in types %} {% set cell_content = '↑' %}{% set cell_class = cell_class + " expense" %}
+                                    {% endif %}
+                                {% endif %}
+                                <td class="{{ cell_class }}" title="{{ title_text | e }}">{{ cell_content }}</td>
+                            {% endfor %}
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="legend">
+            <strong>Обозначения (наведите на иконку для деталей):</strong><br>
+            <span class="income interaction-cell">↓</span> - Только приход. <span class="expense interaction-cell">↑</span> - Только расход.
+            <span class="both interaction-cell">↕</span> - Приход и расход. <span>–</span> - Нет операций.
+        </div>
+    {% endif %}
+</main>
+
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<script type="text/javascript" src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script>
+    // Форматтер валюты
+    function formatCurrency(amount) { if (amount == null || isNaN(amount)) return '0,00'; return amount.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+    // Встроенная русская локализация
+    var russianLocalization = { "processing": "Подождите...", "search": "Поиск:", "lengthMenu": "Показать _MENU_ записей", "info": "Записи с _START_ до _END_ из _TOTAL_ записей", "infoEmpty": "Записи с 0 до 0 из 0 записей", "infoFiltered": "(отфильтровано из _MAX_ записей)", "loadingRecords": "Загрузка записей...", "zeroRecords": "Записи отсутствуют.", "emptyTable": "В таблице отсутствуют данные", "paginate": { "first": "Первая", "previous": "Предыдущая", "next": "Следующая", "last": "Последняя" }, "aria": { "sortAscending": ": акт. для сорт. по возрастанию", "sortDescending": ": акт. для сорт. по убыванию" }, "select": { "rows": { "_": "Выбрано: %d", "0": "", "1": "Выбрана 1 запись" } } };
+
+    $(document).ready(function() {
+        try {
+            var table = $('#comparisonTable').DataTable({
+                "language": russianLocalization,
+                "paging": false,
+                "info": true,
+                "order": [[0, 'asc']],
+                "searching": true,
+                "columnDefs": [ { "orderable": false, "targets": "_all" }, { "orderable": true, "targets": 0 } ],
+                "stateSave": false, // Сохранение состояния отключено
+                "stateDuration": 0
+            });
+
+            var allRowNodes = table.rows().nodes().toArray();
+            var legalFormsInTable = [...new Set(allRowNodes.map(node => $(node).attr('data-legal-form')))].filter(Boolean);
+            var legalFormsFromTemplate = [];
+             $('input[name="legalForm"]:not([value=ALL])').each(function(){ legalFormsFromTemplate.push($(this).val()); });
+             legalFormsFromTemplate.forEach(form => { if (!legalFormsInTable.includes(form)) { legalFormsInTable.push(form); } });
+             legalFormsInTable.sort();
+
+            // Инициализация объекта фильтров
+            var filters = { legalForm: [...legalFormsInTable], hasIncome: true, hasExpense: true, onlyWithOrg: '' };
+            // Установка начального состояния чекбоксов
+            $('input[name="legalForm"]').prop('checked', true);
+            $('input[name="hasIncome"]').prop('checked', true);
+            $('input[name="hasExpense"]').prop('checked', true);
+            $('input[name="onlyWithOrg"][value=""]').prop('checked', true);
+
+            // Функция применения фильтров
+            function applyFilters() {
+                // Сбор состояния чекбоксов ОПФ
+                let selectedFormsCheckboxes = [];
+                $('input[name="legalForm"]:checked').each(function() { selectedFormsCheckboxes.push($(this).val()); });
+
+                // Обновление фильтра ОПФ
+                if (selectedFormsCheckboxes.includes('ALL') || selectedFormsCheckboxes.length === 0) {
+                    filters.legalForm = [...legalFormsInTable]; // Все формы
+                    if (selectedFormsCheckboxes.length === 0) $('input[name="legalForm"][value="ALL"]').prop('checked', true);
+                    if (selectedFormsCheckboxes.includes('ALL')) $('input[name="legalForm"]').prop('checked', true);
+                } else {
+                    filters.legalForm = selectedFormsCheckboxes; // Только выбранные
+                    $('input[name="legalForm"][value="ALL"]').prop('checked', false);
+                }
+
+                // Обновление остальных фильтров
+                filters.hasIncome = $('input[name="hasIncome"]').is(':checked');
+                filters.hasExpense = $('input[name="hasExpense"]').is(':checked');
+                filters.onlyWithOrg = $('input[name="onlyWithOrg"]:checked').val();
+
+                // Перерисовка таблицы
+                table.draw();
+            }
+
+            // Обработчики изменения фильтров
+            $('input[name="legalForm"]').on('change', function() {
+                 var isChecked = $(this).is(':checked'); var value = $(this).val();
+                 if (value === 'ALL') { $('input[name="legalForm"]').prop('checked', isChecked); }
+                 else {
+                     if (isChecked) { $('input[name="legalForm"][value="ALL"]').prop('checked', false); }
+                     else { if ($('input[name="legalForm"]:checked:not([value=ALL])').length === 0) { $('input[name="legalForm"][value="ALL"]').prop('checked', true); } }
+                 }
+                 applyFilters();
+            });
+            $('input[name="hasIncome"], input[name="hasExpense"], input[name="onlyWithOrg"]').on('change', applyFilters);
+
+            // Кастомная функция фильтрации DataTables
+            $.fn.dataTable.ext.search.push( function( settings, data, dataIndex ) {
+                if (settings.nTable.id !== 'comparisonTable') return true;
+                var node = table.row(dataIndex).node();
+                if (!node) return false;
+
+                try {
+                    var rowLegalForm = String($(node).attr('data-legal-form') || '');
+                    var rowHasIncome = $(node).attr('data-has-income') === 'true';
+                    var rowHasExpense = $(node).attr('data-has-expense') === 'true';
+                    var rowOrgs = ($(node).attr('data-interacted-orgs') || '').toString().split(',').filter(Boolean);
+
+                    // 1. Проверка ОПФ
+                    let formFilterPassed = false;
+                    const mainForms = ['ИП', 'ООО', 'АО', 'ГОС', 'ФЛ'];
+                    let isOtherForm = rowLegalForm && !mainForms.includes(rowLegalForm);
+                    if (filters.legalForm.includes(rowLegalForm) || (filters.legalForm.includes('ДРУГОЕ') && isOtherForm)) {
+                        formFilterPassed = true;
+                    }
+                    if (!formFilterPassed) return false;
+
+                    // 2. Проверка Типа Операций
+                    let typeFilterPassed = false;
+                    if (filters.hasIncome && filters.hasExpense) { typeFilterPassed = rowHasIncome || rowHasExpense; }
+                    else if (filters.hasIncome) { typeFilterPassed = rowHasIncome; }
+                    else if (filters.hasExpense) { typeFilterPassed = rowHasExpense; }
+                    else { typeFilterPassed = false; } // Если оба выключены - не показываем
+                    if (!typeFilterPassed) return false;
+
+                    // 3. Проверка "Только С"
+                    if (filters.onlyWithOrg && (rowOrgs.length !== 1 || rowOrgs[0] !== filters.onlyWithOrg)) {
+                        return false;
+                    }
+
+                    return true; // Показать строку, если все проверки пройдены
+
+                } catch (e) {
+                    // В production коде можно убрать console.error или заменить на более мягкое сообщение
+                    console.error(`Ошибка в кастомном фильтре для строки ${dataIndex}:`, e);
+                    return false; // Лучше скрыть строку, чем сломать интерфейс
+                }
+            });
+
+            // Первоначальное применение фильтров (покажет все строки)
+            applyFilters();
+
+        } catch (e) {
+             console.error("Ошибка при инициализации DataTables:", e);
+             alert("Ошибка при инициализации таблицы данных. Проверьте консоль разработчика (F12) для деталей.");
+        }
+    });
+</script>
+</body>
+</html>

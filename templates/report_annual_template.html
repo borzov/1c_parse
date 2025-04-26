@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Отчет по Контрагентам v6.1</title> {# Версия обновлена #}
+    <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@latest/css/pico.min.css">
+    <style>
+        body { font-family: sans-serif; padding-bottom: 50px; font-size: 0.9em; }
+        .container { max-width: 1600px; margin: auto; padding: 15px; }
+        /* DataTables стили */
+        .dataTables_wrapper .dataTables_filter input, .dataTables_wrapper .dataTables_length select { padding: 0.4em; border: 1px solid #ccc; border-radius: 4px; background-color: white; }
+        .dataTables_wrapper .dataTables_paginate .paginate_button { padding: 0.4em 0.9em; margin-left: 3px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; background-color: white; }
+        .dataTables_wrapper .dataTables_paginate .paginate_button.current { background-color: #43a047; color: white !important; border-color: #388e3c; }
+        .dataTables_wrapper .dataTables_paginate .paginate_button:hover { background-color: #f1f1f1; border-color: #ccc; }
+        .dataTables_info, .dataTables_length, .dataTables_filter { margin-bottom: 1em; }
+        /* Таблица */
+        table.dataTable { width: 100% !important; margin-bottom: 1rem !important; border-collapse: collapse !important; border: 1px solid #e0e0e0; }
+        table.dataTable th, table.dataTable td { padding: 7px 10px; border: 1px solid #e0e0e0; text-align: left; vertical-align: middle; }
+        table.dataTable th { background-color: #f5f5f5; border-bottom: 2px solid #bdbdbd; font-weight: 600; white-space: nowrap; }
+        table.dataTable td:nth-child(n+5) { text-align: right; font-family: monospace; white-space: nowrap; } /* Суммы с 5й колонки */
+        table.dataTable tbody tr:hover { background-color: #f0f0f0; }
+        /* Иконка +/- */
+        .dt-control { width: 20px; text-align: center !important; cursor: pointer; user-select: none; }
+        .dt-control::before { content: '▶'; color: #4CAF50; font-size: 0.8em; display: inline-block; transition: transform 0.2s ease-in-out; }
+        tr.dt-hasChild .dt-control::before { transform: rotate(90deg); color: #f44336; }
+        tr.odd { background-color: #fafafa; }
+        .parent-row td { font-weight: 500; }
+        .child-table-container { padding: 10px 15px 10px 40px; background-color: #f9f9f9; border-top: 1px solid #ddd; }
+        .child-table { width: 100%; border-collapse: collapse; margin-top: 5px; }
+        .child-table th, .child-table td { padding: 6px 8px; border: 1px solid #e8e8e8; font-size: 0.95em; }
+        .child-table th { background-color: #f1f1f1; }
+        .child-table td:nth-child(n+2) { text-align: right; font-family: monospace; white-space: nowrap; }
+        .child-org-row td:first-child { padding-left: 25px !important; font-style: italic; }
+        .income { color: #388e3c; }
+        .expense { color: #d32f2f; }
+        .no-data { font-style: italic; color: #757575; } /* Стиль для (не указ.) */
+        .cp-name-display { font-weight: bold; } /* Выделяем имя */
+    </style>
+</head>
+<body>
+<main class="container">
+    <h1>Отчет по Контрагентам <small>(с детализацией)</small></h1>
+    <p>Дата формирования: {{ generation_time }}</p>
+    <p>Проанализированы организации: {{ analyzed_org_names | join(', ') }}</p>
+    <p><i>Примечание: Кликните на '▶' для просмотра деталей по годам и организациям. Используйте поиск и сортировку.</i></p>
+
+    {% if not report_data_json %}
+        <p>Нет данных о транзакциях с контрагентами для отображения.</p>
+    {% else %}
+        <table id="annualReportTable" class="display compact" style="width:100%">
+            <thead>
+                <tr>
+                    <th></th> <!-- Для +/- контроля -->
+                    <th>Контрагент</th>
+                    <th>ИНН</th>
+                    <th>Счет</th>
+                    <th>Приход (Итого)</th>
+                    <th>Расход (Итого)</th>
+                </tr>
+            </thead>
+            <tbody></tbody> {# Данные будут загружены через JS #}
+        </table>
+    {% endif %}
+</main>
+
+<!-- Вставляем данные в JSON формате для JavaScript -->
+<script type="application/json" id="reportData">
+{{ report_data_json | safe }}
+</script>
+
+<script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
+<script type="text/javascript" src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+<script>
+    // Функция форматирования дочерней строки
+    function formatChildRow ( rowData ) {
+        if (!rowData.years_details || rowData.years_details.length === 0) {
+            return '<div class="child-table-container no-data">Нет деталей для отображения.</div>';
+        }
+        let childHtml = '<div class="child-table-container"><table class="child-table"><thead><tr><th>Год / Организация</th><th>Приход</th><th>Расход</th></tr></thead><tbody>';
+        rowData.years_details.forEach(yearDetail => {
+            // Строка с итогами по году
+            childHtml += `<tr style="font-weight:bold; background-color:#eee;"><td>${yearDetail.year} год</td><td>${formatCurrency(yearDetail.year_income)}</td><td>${formatCurrency(yearDetail.year_expense)}</td></tr>`;
+            // Строки с детализацией по организациям в этом году
+            yearDetail.orgs.forEach(orgDetail => {
+                childHtml += `<tr class="child-org-row"><td>${escapeHtml(orgDetail.name)}</td><td>${formatCurrency(orgDetail.income)}</td><td>${formatCurrency(orgDetail.expense)}</td></tr>`;
+            });
+         });
+        childHtml += '</tbody></table></div>';
+        return childHtml;
+     }
+
+    // Функция форматирования валюты
+    function formatCurrency(amount) {
+        if (amount == null || isNaN(amount)) return '0,00';
+        // Используем toLocaleString для правильного форматирования с разделителями
+        return amount.toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    // Функция экранирования HTML для безопасного вывода
+    function escapeHtml(unsafe) {
+        if (typeof unsafe !== 'string') {
+            return unsafe === null || unsafe === undefined ? "" : String(unsafe);
+        }
+        var div = document.createElement('div');
+        div.appendChild(document.createTextNode(unsafe));
+        return div.innerHTML;
+     }
+
+    // Функция форматирования имени для отображения в таблице
+    function formatDisplayName(nameNormalized, legalForm, displayNameHint, rawNames) {
+        // Приоритет у display_name, если он был сформирован на бэкенде (Фамилия И.О.)
+        if (displayNameHint) {
+            if (legalForm === 'ИП') return `ИП ${displayNameHint}`;
+            return displayNameHint; // Для ФЛ без префикса
+        }
+
+        // Иначе форматируем по стандартным правилам, используя name_normalized
+        if (!nameNormalized || nameNormalized === "?") return `<span title="${escapeHtml(rawNames)}">?</span>`;
+        let escapedName = escapeHtml(nameNormalized);
+
+        if (legalForm === 'ИП') return `<span title="${escapeHtml(rawNames)}">ИП ${escapedName}</span>`; // Имя уже должно быть ФИО
+        if (legalForm === 'ООО') return `<span title="${escapeHtml(rawNames)}">ООО "${escapedName}"</span>`;
+        if (legalForm === 'АО') return `<span title="${escapeHtml(rawNames)}">АО "${escapedName}"</span>`;
+        if (legalForm === 'ГОС') return `<span title="${escapeHtml(rawNames)}">${escapedName}</span>`;
+        if (legalForm === 'ФЛ' || legalForm === 'ИП/ФЛ') return `<span title="${escapeHtml(rawNames)}">${escapedName}</span>`; // Уже должно быть ФИО
+
+        // Для остальных ОПФ (АНО, ФОНД и т.д.) и ДРУГОЕ/ЮЛ
+        if (legalForm && legalForm !== 'ДРУГОЕ' && legalForm !== 'ЮЛ') {
+             // Простая эвристика: если в имени есть пробел, считаем ФИО или сложным названием - без кавычек
+             let isLikelyFioOrComplex = escapedName.includes(' ');
+             return isLikelyFioOrComplex
+                    ? `<span title="${escapeHtml(rawNames)}">${legalForm} ${escapedName}</span>`
+                    : `<span title="${escapeHtml(rawNames)}">${legalForm} "${escapedName}"</span>`;
+        }
+        // Просто имя для ДРУГОЕ/ЮЛ
+        return `<span title="${escapeHtml(rawNames)}">${escapedName}</span>`;
+    }
+
+    $(document).ready(function() {
+         // Поддержка сортировки чисел с запятой и пробелами
+         jQuery.extend(jQuery.fn.dataTableExt.oSort, {
+            "numeric-comma-pre": function ( a ) {
+                // Убираем всё кроме цифр, запятой, минуса; меняем запятую на точку
+                var x = String(a).replace(/[^\d,-]/g, '').replace(',', '.');
+                return parseFloat(x) || 0; // Возвращаем 0, если не число
+             },
+            "numeric-comma-asc": function ( a, b ) { return a - b; },
+            "numeric-comma-desc": function ( a, b ) { return b - a; }
+         });
+
+        var tableData;
+        try {
+            // Парсим JSON данные из <script> тега
+            tableData = JSON.parse(document.getElementById('reportData').textContent);
+        }
+        catch (e) {
+            console.error("Ошибка парсинга JSON данных:", e);
+            alert("Ошибка загрузки данных отчета.");
+            return; // Прекращаем выполнение, если данные не загружены
+        }
+
+        // Инициализируем DataTables, только если есть данные
+        if (tableData && tableData.length > 0) {
+            var table = $('#annualReportTable').DataTable({
+                data: tableData,
+                columns: [
+                    { // +/- контроль
+                        className: 'dt-control',
+                        orderable: false,
+                        data: null,
+                        defaultContent: '',
+                        width: '20px' // Фиксируем ширину
+                    },
+                    { // Контрагент (с форматированием и подсказкой)
+                        data: null, // Данные берем из всей строки (row)
+                        className: 'cp-name-display',
+                        render: function(data, type, row) {
+                            // Форматируем имя для отображения
+                            return formatDisplayName(row.name_normalized, row.legal_form, row.display_name, row.raw_names);
+                        }
+                    },
+                    { // ИНН
+                        data: 'inn',
+                        render: function(data) {
+                            return data ? escapeHtml(data) : '<span class="no-data">(не указ.)</span>';
+                        }
+                    },
+                    { // Счет (используем список счетов из 'accounts')
+                        data: 'accounts',
+                        orderable: false, // Обычно не сортируют по счетам
+                        render: function(data) {
+                            // data здесь - это строка счетов через запятую
+                            return data ? escapeHtml(data) : '<span class="no-data">(не указ.)</span>';
+                        }
+                    },
+                    { // Приход
+                        data: 'total_income',
+                        className: 'income',
+                        type: 'numeric-comma', // Тип для сортировки
+                        render: function(data) { return formatCurrency(data); } // Форматирование для отображения
+                    },
+                    { // Расход
+                        data: 'total_expense',
+                        className: 'expense',
+                        type: 'numeric-comma', // Тип для сортировки
+                        render: function(data) { return formatCurrency(data); } // Форматирование для отображения
+                    }
+                 ],
+                 // Используем встроенную локализацию
+                 "language": {
+                     "processing": "Подождите...", "search": "Поиск:", "lengthMenu": "Показать _MENU_ записей",
+                     "info": "Записи с _START_ до _END_ из _TOTAL_ записей", "infoEmpty": "Записи с 0 до 0 из 0 записей",
+                     "infoFiltered": "(отфильтровано из _MAX_ записей)", "loadingRecords": "Загрузка записей...",
+                     "zeroRecords": "Записи отсутствуют.", "emptyTable": "В таблице отсутствуют данные",
+                     "paginate": { "first": "Первая", "previous": "Предыдущая", "next": "Следующая", "last": "Последняя" },
+                     "aria": { "sortAscending": ": активировать для сортировки столбца по возрастанию", "sortDescending": ": активировать для сортировки столбца по убыванию" }
+                 },
+                 "paging": false,       // Пагинация ВЫКЛЮЧЕНА
+                 "lengthChange": false, // Выбор кол-ва строк убран
+                 "info": true,          // Оставили инфо (Показано X из Y записей)
+                 "order": [[1, 'asc']], // Сортировка по имени контрагента по умолчанию
+                 "searching": true,     // Включаем поиск
+                 "columnDefs": [
+                    // Применяем тип сортировки к колонкам с суммами
+                    { "type": "numeric-comma", "targets": [4, 5] }
+                  ]
+             });
+
+            // Обработчик для открытия/закрытия дочерних строк
+            $('#annualReportTable tbody').on('click', 'td.dt-control', function () {
+                var tr = $(this).closest('tr');
+                var row = table.row( tr );
+                if ( row.child.isShown() ) {
+                    // Эта строка уже открыта - закрываем ее
+                    row.child.hide();
+                    tr.removeClass('dt-hasChild');
+                } else {
+                    // Открываем эту строку
+                    row.child( formatChildRow(row.data()) ).show();
+                    tr.addClass('dt-hasChild');
+                }
+            });
+        } else {
+             // Если данных нет, можно вывести сообщение
+             $('#annualReportTable').after('<p>Нет данных для отображения в таблице.</p>');
+        }
+    });
+</script>
+</body>
+</html>

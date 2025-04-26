@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+*.venv/
+ENV/
+env/
+venv.*/
+env.*/
+ENV.*/
+env.*/
+.env
+
+# IDE / Editor specific
+.vscode/
+.idea/
+*.swp
+*~
+
+# Output files
+data/*
+reports/*
+!reports/.gitkeep
+debug_names.csv
+reports/analysis.txt
+reports/debug_*.csv
+
+# OS specific
+.DS_Store
+Thumbs.db
