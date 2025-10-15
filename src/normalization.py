@@ -40,7 +40,15 @@ for form_key, patterns in LEGAL_FORMS_KEYWORDS.items():
             logger.error(f"Ошибка компиляции Regex FIND для ОПФ '{form_key}', паттерн '{p_str}': {e}")
     COMPILED_LEGAL_FORMS_FIND[form_key] = compiled_patterns
 
-# Паттерны для удаления мусора
+# White-list паттернов, которые НЕ должны удаляться
+WHITELIST_PATTERNS = [
+    re.compile(r'\b(ИП|ООО|АО|ПАО|НАО|ЗАО|ОАО|АНО|НКО|ФОНД|АССОЦИАЦИЯ|КООПЕРАТИВ|ПАРТНЕРСТВО)\b', re.IGNORECASE),
+    re.compile(r'\b(ИНДИВИДУАЛЬНЫЙ\s+ПРЕДПРИНИМАТЕЛЬ|ОБЩЕСТВО\s+С\s+ОГРАНИЧЕННОЙ\s+ОТВЕТСТВЕННОСТЬЮ)\b', re.IGNORECASE),
+    re.compile(r'\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ]\.\s*[А-ЯЁ]\.\b'),  # Фамилия И.О.
+    re.compile(r'\b[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\s+[А-ЯЁ][а-яё]+\b'),  # Полное ФИО
+]
+
+# Паттерны для удаления мусора (улучшенные)
 TRASH_PATTERNS_SPECIFIC = [
     re.compile(r'(?:^|\s)(?:Р/СЧ?|Л/СЧ?|К/СЧ?|БИК)\s*\d+.*', re.IGNORECASE),
     re.compile(r'\s+\bИНН\s*\d{10}(\d{2})?\b', re.IGNORECASE),
@@ -48,12 +56,14 @@ TRASH_PATTERNS_SPECIFIC = [
     re.compile(r'\s+\b(УНП|БИН)\s*\d+\b', re.IGNORECASE),
     re.compile(r'\s+ID[/\s:]*\d+'),
     re.compile(r'\s*//.*?//\s*', re.DOTALL),
-    # Удалено слишком широкое правило для адресов
-    re.compile(r'\s+\b(РОССИЯ|РФ|РЕСПУБЛИКА|КАЗАХСТАН|ЛИТВА|ЛАТВИЯ|РБ|KZ|LT|LV|DE|ГОРОД|ОБЛАСТЬ|КРАЙ|АО|ГО)\b.*?(?=(//|$|\s+В\s+\w+\s+БАНК))', re.IGNORECASE | re.DOTALL),
+    # Более точное правило для адресов - только если это явно адрес
+    re.compile(r'\s+\b(РОССИЯ|РФ|РЕСПУБЛИКА|КАЗАХСТАН|ЛИТВА|ЛАТВИЯ|РБ|KZ|LT|LV|DE)\b.*?(?=(//|$|\s+В\s+\w+\s+БАНК))', re.IGNORECASE | re.DOTALL),
     re.compile(r'\b\d{6}\b'), # 6-значный индекс
     re.compile(r'\s+В\s+.*?\s+(БАНК\b|ФИЛИАЛ\b|ОАО\b|ПАО\b|АО\b|УФК\b|ОТДЕЛЕНИЕ\b)', re.IGNORECASE | re.DOTALL),
     re.compile(r'\s+Р/С\s+NULL\b', re.IGNORECASE),
-    re.compile(r'\s+\(.*\)$', re.DOTALL)
+    # Удаляем скобки только если они содержат только цифры или служебную информацию
+    re.compile(r'\s+\(\s*(?:ИНН|КПП|БИК|Р/С|Л/С|К/С|ID|№)\s*[:\s]*[^)]*\)', re.IGNORECASE),
+    re.compile(r'\s+\(\s*\d+\s*\)$'),  # Только цифры в скобках в конце
 ]
 
 # Прочие паттерны
@@ -61,6 +71,23 @@ QUOTES_PATTERN = re.compile(r'[\"„""«»\'`<>]+')
 SPACES_PATTERN = re.compile(r'\s+')
 IS_FIO_STRUCTURE = re.compile(r'^([А-ЯЁа-яё\-]+\s+)+[А-ЯЁа-яё\-.]+$')
 INITIALS_PATTERN = re.compile(r'\b([А-ЯЁ])\s*\.\s*([А-ЯЁ])\s*\.?$')
+
+# Списки типичных имен и фамилий для улучшения определения ФИО
+COMMON_SURNAMES = {
+    'иванов', 'петров', 'сидоров', 'смирнов', 'кузнецов', 'попов', 'соколов', 'лебедев', 'козлов', 'новikov',
+    'морозов', 'петрова', 'волков', 'алексеев', 'лебедева', 'семенов', 'егоров', 'павлов', 'козлова', 'степанов',
+    'николаев', 'орлов', 'андреев', 'макаров', 'никитин', 'захаров', 'зайцев', 'соловьев', 'бородин', 'яковлев'
+}
+
+COMMON_NAMES = {
+    'александр', 'алексей', 'андрей', 'антон', 'артем', 'борис', 'вадим', 'валентин', 'валерий', 'василий',
+    'виктор', 'виталий', 'владимир', 'владислав', 'вячеслав', 'геннадий', 'георгий', 'григорий', 'даниил', 'денис',
+    'дмитрий', 'евгений', 'егор', 'иван', 'игорь', 'илья', 'кирилл', 'константин', 'леонид', 'максим',
+    'михаил', 'николай', 'олег', 'павел', 'петр', 'роман', 'сергей', 'станислав', 'степан', 'тимур',
+    'федор', 'юрий', 'ярослав', 'анастасия', 'анна', 'валентина', 'вера', 'виктория', 'галина', 'дарья',
+    'екатерина', 'елена', 'жанна', 'зоя', 'инна', 'ирина', 'кристина', 'ксения', 'лариса', 'людмила',
+    'марина', 'мария', 'надежда', 'наталья', 'ольга', 'полина', 'светлана', 'татьяна', 'юлия', 'яна'
+}
 
 # --- Функции ---
 
@@ -98,9 +125,24 @@ def detect_final_legal_form(raw_name: Optional[str], inn: Optional[str] = None) 
 
     name_for_fio_check = re.sub(r'[\d.,\"\']', '', raw_name).strip()
     fio_words = re.findall(r'\b[А-ЯЁ][а-яё\-]+\b', name_for_fio_check)
-    if len(fio_words) >= 2 and IS_FIO_STRUCTURE.match(name_for_fio_check):
-        logger.debug(f"Форма для {repr(raw_name)} -> 'ФЛ' (по структуре ФИО)")
-        return "ФЛ"
+    
+    # Улучшенная проверка ФИО с использованием списков имен
+    if len(fio_words) >= 2:
+        # Проверяем, есть ли типичные имена/фамилии
+        has_common_name = any(word.lower() in COMMON_NAMES for word in fio_words)
+        has_common_surname = any(word.lower() in COMMON_SURNAMES for word in fio_words)
+        
+        # Проверяем структуру ФИО
+        has_fio_structure = IS_FIO_STRUCTURE.match(name_for_fio_check)
+        
+        # Если есть типичные имена/фамилии И правильная структура
+        if (has_common_name or has_common_surname) and has_fio_structure:
+            logger.debug(f"Форма для {repr(raw_name)} -> 'ФЛ' (по типичным именам/фамилиям и структуре)")
+            return "ФЛ"
+        elif len(fio_words) >= 3 and has_fio_structure:
+            # Если 3+ слова и правильная структура, скорее всего ФИО
+            logger.debug(f"Форма для {repr(raw_name)} -> 'ФЛ' (по структуре ФИО)")
+            return "ФЛ"
 
     logger.debug(f"Форма для {repr(raw_name)} -> 'ДРУГОЕ' (не определена)")
     return "ДРУГОЕ"
@@ -136,23 +178,44 @@ def format_fio_display(fio_str: Optional[str]) -> str:
 
 
 def normalize_name_core(raw_name: Optional[str], detected_form: Optional[str] = None) -> Optional[str]:
-    """Очищает имя от мусора и ОПФ."""
+    """Очищает имя от мусора и ОПФ с учетом white-list паттернов."""
     if not raw_name or not isinstance(raw_name, str): return None
     name = raw_name.strip()
     if not name: return None
     logger.debug(f"Нормализация ядра для {repr(name)}, форма: {detected_form}")
 
-    # 1. Удаление мусора
+    # Проверяем, содержит ли имя важные паттерны из white-list
+    important_parts = []
+    for pattern in WHITELIST_PATTERNS:
+        matches = pattern.findall(name)
+        if matches:
+            important_parts.extend(matches)
+            logger.debug(f"  Найдены важные части: {matches}")
+
+    # 1. Удаление мусора (с осторожностью)
     cleaned = name
     for i, pattern in enumerate(TRASH_PATTERNS_SPECIFIC):
         cleaned_before = cleaned
         try:
-            cleaned = pattern.sub(' ', cleaned)
-            if cleaned != cleaned_before:
-                 logger.debug(f"  Применено правило мусора #{i} ({pattern.pattern}): {repr(cleaned_before)} -> {repr(cleaned.strip())}")
+            # Проверяем, не удаляем ли мы важную часть
+            test_cleaned = pattern.sub(' ', cleaned)
+            if test_cleaned != cleaned_before:
+                # Проверяем, остались ли важные части
+                important_parts_remaining = []
+                for important_part in important_parts:
+                    if important_part.lower() in test_cleaned.lower():
+                        important_parts_remaining.append(important_part)
+                
+                # Если важные части сохранились, применяем правило
+                if len(important_parts_remaining) >= len(important_parts) * 0.8:  # 80% важных частей должны сохраниться
+                    cleaned = test_cleaned
+                    logger.debug(f"  Применено правило мусора #{i} ({pattern.pattern}): {repr(cleaned_before)} -> {repr(cleaned.strip())}")
+                else:
+                    logger.debug(f"  Пропущено правило мусора #{i} - может удалить важные части")
         except Exception as e:
             logger.error(f"Ошибка Regex мусора #{i} ({pattern.pattern}) для {repr(cleaned_before)}: {e}")
             cleaned = cleaned_before
+    
     cleaned = SPACES_PATTERN.sub(' ', cleaned).strip()
     if not cleaned:
         logger.debug(f"Имя стало пустым после чистки мусора.")

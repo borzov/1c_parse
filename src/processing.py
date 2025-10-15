@@ -6,7 +6,7 @@ import csv
 import logging
 import sys
 from collections import defaultdict, Counter
-from typing import Optional, List, Dict, Set, Tuple, Any
+from typing import Optional, List, Dict, Set, Tuple, Any, Union
 from .utils import get_doc_party_name, parse_date, safe_float, get_best_name
 from .normalization import normalize_and_classify, format_fio_display
 from .config import (
@@ -23,6 +23,7 @@ DEBUG_TRANSACTIONS_LIST: List[Dict[str, Any]] = []
 def detect_organizations(parsed_files_data: List[Tuple[Optional[Dict], Optional[List[Dict]]]]) -> Dict[str, Dict]:
     """
     Определяет наши организации по данным из файлов выписок.
+    Оптимизированная версия с единым проходом для создания индекса.
 
     Args:
         parsed_files_data: Список кортежей (header_info, documents) для каждого файла.
@@ -31,95 +32,98 @@ def detect_organizations(parsed_files_data: List[Tuple[Optional[Dict], Optional[
         Словарь, где ключ - расчетный счет нашей организации,
         значение - словарь с информацией ('name', 'normalized', 'legal_form', 'inn').
     """
-    logger.info("Автоматическое определение организаций (2 прохода)...")
+    logger.info("Автоматическое определение организаций (оптимизированный алгоритм)...")
     detected_orgs: Dict[str, Dict] = {}
-    needing_names: Dict[str, Dict] = {} # Счета, для которых имя не нашлось сразу
-    all_docs: List[Dict] = [doc for _, docs in parsed_files_data if docs for doc in docs]
-    processed_file_accounts: Set[str] = set()
-
-    logger.debug("  Проход 1: Поиск имен в 'родных' файлах...")
+    
+    # Создаем единый индекс: счет -> (имена, ИННы, источники)
+    account_index: Dict[str, Dict[str, Any]] = defaultdict(lambda: {
+        'names': Counter(), 'inns': set(), 'sources': set(), 'header_inn': None
+    })
+    
+    # Собираем все документы и создаем индекс за один проход
+    all_docs: List[Dict] = []
     for header_info, documents in parsed_files_data:
         if not header_info: continue
+        
         file_account = header_info.get('ОсновнойСчетФайла')
         file_path_for_log = header_info.get('_filepath', 'Неизвестный')
+        
         if not file_account:
             logger.warning(f"Файл {file_path_for_log} не содержит 'ОсновнойСчетФайла' в заголовке.")
             continue
-        if file_account in processed_file_accounts:
-            logger.debug(f"Счет {file_account} уже обработан в Проходе 1 (из файла {file_path_for_log}), пропуск.")
-            continue
-        processed_file_accounts.add(file_account)
+            
+        # Добавляем информацию из заголовка
+        account_index[file_account]['header_inn'] = header_info.get("ИНН")
+        account_index[file_account]['sources'].add(file_path_for_log)
+        
+        # Добавляем имена из заголовка
+        header_name = header_info.get('Плательщик') or header_info.get('Получатель')
+        if header_name:
+            account_index[file_account]['names'].update([header_name])
+        
+        # Обрабатываем документы
+        if documents:
+            all_docs.extend(documents)
+            for doc in documents:
+                p_acc, r_acc = doc.get('ПлательщикСчет'), doc.get('ПолучательСчет')
+                p_name, r_name = get_doc_party_name(doc, 'Плательщик'), get_doc_party_name(doc, 'Получатель')
+                p_inn, r_inn = doc.get('ПлательщикИНН'), doc.get('ПолучательИНН')
+                
+                # Добавляем данные плательщика
+                if p_acc in account_index:
+                    if p_name: account_index[p_acc]['names'].update([p_name])
+                    if p_inn: account_index[p_acc]['inns'].add(p_inn)
+                
+                # Добавляем данные получателя
+                if r_acc in account_index:
+                    if r_name: account_index[r_acc]['names'].update([r_name])
+                    if r_inn: account_index[r_acc]['inns'].add(r_inn)
 
-        org_inn = header_info.get("ИНН")
-        name_raw = None
-
-        payer_doc = next((d for d in documents if d.get('ПлательщикСчет') == file_account and get_doc_party_name(d, 'Плательщик')), None)
-        if payer_doc:
-            name_raw = get_doc_party_name(payer_doc, 'Плательщик')
-            if not org_inn: org_inn = payer_doc.get('ПлательщикИНН')
-            logger.debug(f"Найдено имя для счета {file_account} как Плательщик: '{name_raw[:50]}...' (в файле {file_path_for_log})")
-
-        if not name_raw:
-            receiver_doc = next((d for d in documents if d.get('ПолучательСчет') == file_account and get_doc_party_name(d, 'Получатель')), None)
-            if receiver_doc:
-                name_raw = get_doc_party_name(receiver_doc, 'Получатель')
-                if not org_inn: org_inn = receiver_doc.get('ПолучательИНН')
-                logger.debug(f"Найдено имя для счета {file_account} как Получатель: '{name_raw[:50]}...' (в файле {file_path_for_log})")
-
-        if not name_raw:
-            name_raw = header_info.get('Плательщик') or header_info.get('Получатель')
-            if name_raw: logger.debug(f"Найдено имя для счета {file_account} в заголовке файла {file_path_for_log}: '{name_raw[:50]}...'")
-
-        if name_raw:
-            name_norm, form, _ = normalize_and_classify(name_raw, org_inn)
+    logger.debug(f"Создан индекс для {len(account_index)} счетов")
+    
+    # Обрабатываем каждый счет из индекса
+    for account, data in account_index.items():
+        # Выбираем лучшее имя
+        best_raw_name = get_best_name(data['names'], DEFAULT_ORG_NAME_PREFIX)
+        
+        # Определяем ИНН (приоритет: из документов, затем из заголовка)
+        final_inn = None
+        if data['inns']:
+            # Если есть несколько ИНН, берем самый частый или первый
+            inn_list = list(data['inns'])
+            final_inn = inn_list[0] if len(inn_list) == 1 else inn_list[0]
+        elif data['header_inn']:
+            final_inn = data['header_inn']
+        
+        # Пытаемся нормализовать имя
+        if best_raw_name and DEFAULT_ORG_NAME_PREFIX not in best_raw_name:
+            name_norm, form, _ = normalize_and_classify(best_raw_name, final_inn)
             if name_norm and name_norm != '?':
-                detected_orgs[file_account] = {'name': name_raw, 'normalized': name_norm, 'legal_form': form, 'inn': org_inn or ''}
-                logger.info(f"  Определена организация: Счет {file_account} -> '{name_norm}' (Форма: {form}, ИНН: {org_inn or 'нет'})")
+                detected_orgs[account] = {
+                    'name': best_raw_name, 
+                    'normalized': name_norm, 
+                    'legal_form': form, 
+                    'inn': final_inn or ''
+                }
+                logger.info(f"  Определена организация: Счет {account} -> '{name_norm}' (Форма: {form}, ИНН: {final_inn or 'нет'})")
             else:
-                needing_names[file_account] = {'name': f"{DEFAULT_ORG_NAME_PREFIX} {file_account}", 'normalized': f"{DEFAULT_ORG_NAME_PREFIX} {file_account}", 'legal_form': 'ДРУГОЕ', 'inn': org_inn or '', 'sources': [file_path_for_log]}
-                logger.warning(f"  Счет {file_account}: Имя '{name_raw[:30]}...' найдено (П1), но не нормализовалось. Требуется Проход 2.")
+                # Fallback к дефолтному имени
+                detected_orgs[account] = {
+                    'name': f"{DEFAULT_ORG_NAME_PREFIX} {account}",
+                    'normalized': f"{DEFAULT_ORG_NAME_PREFIX} {account}",
+                    'legal_form': 'ДРУГОЕ',
+                    'inn': final_inn or ''
+                }
+                logger.warning(f"  Счет {account}: Имя '{best_raw_name[:30]}...' не нормализовалось. Используется дефолтное.")
         else:
-            needing_names[file_account] = {'name': f"{DEFAULT_ORG_NAME_PREFIX} {file_account}", 'normalized': f"{DEFAULT_ORG_NAME_PREFIX} {file_account}", 'legal_form': 'ДРУГОЕ', 'inn': org_inn or '', 'sources': [file_path_for_log]}
-            logger.warning(f"  Счет {file_account}: Имя не найдено в 'родном' файле (П1) {file_path_for_log}. Требуется Проход 2.")
-
-    logger.debug("  Проход 2: Поиск имен для оставшихся счетов...")
-    if needing_names:
-        names_found_global: Dict[str, Counter[str]] = defaultdict(Counter)
-        inns_found_global: Dict[str, Set[str]] = defaultdict(set)
-
-        for doc in all_docs:
-            p_acc, r_acc = doc.get('ПлательщикСчет'), doc.get('ПолучательСчет')
-            p_name, r_name = get_doc_party_name(doc, 'Плательщик'), get_doc_party_name(doc, 'Получатель')
-            p_inn, r_inn = doc.get('ПлательщикИНН'), doc.get('ПолучательИНН')
-
-            if p_acc in needing_names:
-                if p_name: names_found_global[p_acc].update([p_name])
-                if p_inn: inns_found_global[p_acc].add(p_inn)
-            if r_acc in needing_names:
-                if r_name: names_found_global[r_acc].update([r_name])
-                if r_inn: inns_found_global[r_acc].add(r_inn)
-
-        for acc, default_data in needing_names.items():
-            if acc in detected_orgs: continue
-
-            name_counts = names_found_global.get(acc)
-            best_raw = get_best_name(name_counts, DEFAULT_ORG_NAME_PREFIX) if name_counts else None
-            acc_inns = inns_found_global.get(acc)
-            inn_for_detection = list(acc_inns)[0] if acc_inns and len(acc_inns) == 1 else default_data.get('inn')
-
-            if best_raw and DEFAULT_ORG_NAME_PREFIX not in best_raw:
-                name_norm, form, _ = normalize_and_classify(best_raw, inn_for_detection)
-                if name_norm and name_norm != '?':
-                    detected_orgs[acc] = {'name': best_raw, 'normalized': name_norm, 'legal_form': form, 'inn': inn_for_detection or ''}
-                    logger.info(f"  Определена организация (П2): Счет {acc} -> '{name_norm}' (Форма: {form}, ИНН: {inn_for_detection or 'нет'})")
-                else:
-                    detected_orgs[acc] = default_data
-                    logger.warning(f"  Счет {acc}: Лучшее имя '{best_raw[:30]}...' найдено (П2), но не нормализовалось. Используется дефолтное.")
-            else:
-                detected_orgs[acc] = default_data
-                logger.warning(f"  Счет {acc}: Имя не найдено (П2). Используется дефолтное.")
-    else:
-        logger.debug("  Счета, требующие Прохода 2, отсутствуют.")
+            # Нет подходящего имени
+            detected_orgs[account] = {
+                'name': f"{DEFAULT_ORG_NAME_PREFIX} {account}",
+                'normalized': f"{DEFAULT_ORG_NAME_PREFIX} {account}",
+                'legal_form': 'ДРУГОЕ',
+                'inn': final_inn or ''
+            }
+            logger.warning(f"  Счет {account}: Имя не найдено. Используется дефолтное.")
 
     logger.info(f"Определение организаций завершено. Найдено {len(detected_orgs)} уникальных счетов организаций.")
     if logger.isEnabledFor(logging.DEBUG):
@@ -127,6 +131,87 @@ def detect_organizations(parsed_files_data: List[Tuple[Optional[Dict], Optional[
              logger.debug(f"    Итог: {acc} -> '{data['normalized']}' (Raw: '{data['name'][:50]}...', Form: {data['legal_form']}, INN: {data.get('inn', 'N/A')})")
     return detected_orgs
 
+
+def _determine_transaction_type_and_parties(doc: Dict, our_accounts: Set[str]) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str], Optional[str], Optional[str]]:
+    """
+    Определяет тип транзакции и участников.
+    
+    Returns:
+        Tuple[type, our_account, cp_name, cp_inn, cp_account, our_details]
+        type: 'income' или 'expense' или None
+    """
+    p_acc, r_acc = doc.get('ПлательщикСчет'), doc.get('ПолучательСчет')
+    f_acc = doc.get('СчетФайла')
+    
+    p_name_raw = get_doc_party_name(doc, 'Плательщик')
+    r_name_raw = get_doc_party_name(doc, 'Получатель')
+    
+    is_p_ours = p_acc in our_accounts
+    is_r_ours = r_acc in our_accounts
+    
+    # Определяем тип операции и участников
+    if p_acc == f_acc and is_p_ours:
+        return 'expense', p_acc, r_name_raw, doc.get('ПолучательИНН', ''), r_acc, None
+    elif r_acc == f_acc and is_r_ours:
+        return 'income', r_acc, p_name_raw, doc.get('ПлательщикИНН', ''), p_acc, None
+    else:
+        # Случай несовпадения счета файла
+        if is_p_ours and not is_r_ours:
+            return 'expense', p_acc, r_name_raw, doc.get('ПолучательИНН', ''), r_acc, None
+        elif is_r_ours and not is_p_ours:
+            return 'income', r_acc, p_name_raw, doc.get('ПлательщикИНН', ''), p_acc, None
+        else:
+            return None, None, None, None, None, None
+
+def _create_transaction_data(doc: Dict, our_details: Dict, our_acc: str, type: str, 
+                           cp_raw: str, cp_inn: str, cp_acc: str) -> Dict:
+    """Создает структуру данных транзакции."""
+    date_field = 'ДатаСписано' if type == 'expense' else 'ДатаПоступило'
+    date_str = doc.get(date_field) or doc.get('Дата')
+    date_oper = parse_date(date_str)
+    amount = safe_float(doc.get('Сумма'))
+    
+    cp_inn_clean = cp_inn.strip() if cp_inn else ''
+    cp_acc_clean = cp_acc.strip() if cp_acc else ''
+    cp_norm, cp_legal_form, cp_raw_original = normalize_and_classify(cp_raw, cp_inn_clean)
+    
+    # Генерируем ID контрагента
+    if cp_inn_clean and cp_inn_clean != '0':
+        cp_id = f"INN:{cp_inn_clean}"
+    else:
+        name_part_for_id = "?"
+        if cp_norm and cp_norm != '?': 
+            name_part_for_id = cp_norm.upper()
+        elif cp_raw_original and cp_raw_original != '?': 
+            name_part_for_id = cp_raw_original.upper()
+        else: 
+            name_part_for_id = "БЕЗ_ИМЕНИ"
+        acc_part = cp_acc_clean if cp_acc_clean else "БЕЗ_СЧЕТА"
+        cp_id = f"NAME_ACC:{name_part_for_id}|{acc_part}"
+    
+    # Форматируем отображаемое имя для ФИО
+    display_name_hint = None
+    if cp_norm and cp_norm != '?' and cp_legal_form in ['ИП', 'ФЛ']:
+        display_name_hint = format_fio_display(cp_norm)
+    
+    return {
+        'our_org_normalized': our_details.get('normalized', '?'),
+        'our_org_original': our_details.get('name', '?'),
+        'our_account': our_acc,
+        'type': type,
+        'cp_id': cp_id,
+        'cp_name_raw': cp_raw_original or "?",
+        'cp_name_normalized': cp_norm or "?",
+        'cp_display_name_hint': display_name_hint,
+        'cp_legal_form': cp_legal_form,
+        'cp_inn': cp_inn_clean,
+        'cp_account': cp_acc_clean,
+        'date': date_oper.strftime('%Y-%m-%d'),
+        'year': date_oper.year,
+        'amount': amount,
+        'doc_number': doc.get('Номер', ''),
+        'purpose': doc.get('НазначениеПлатежа', '')
+    }
 
 def process_documents(all_documents: List[Dict], our_orgs_map: Dict[str, Dict]) -> List[Dict]:
     """
@@ -152,75 +237,50 @@ def process_documents(all_documents: List[Dict], our_orgs_map: Dict[str, Dict]) 
     logger.info(f"Начало обработки {total_docs} документов...")
 
     for doc_index, doc in enumerate(all_documents):
-        # Индикатор прогресса убран из production кода
-        # if (doc_index + 1) % 500 == 0 or (doc_index + 1) == total_docs:
-        #     progress = (doc_index + 1) / total_docs
-        #     progress_bar = '#' * int(progress * 20) + '-' * (20 - int(progress * 20))
-        #     print(f"\rОбработка документов: [{progress_bar}] {doc_index+1}/{total_docs}", end='')
-        #     sys.stdout.flush()
-
         doc_num_str = doc.get('Номер', 'б/н')
         doc_date_str = doc.get('Дата', '?')
         file_basename = os.path.basename(doc.get('_filepath','?'))
         log_prefix = f"Doc {doc_index+1} (№{doc_num_str} от {doc_date_str}, Файл: {file_basename}):"
 
         p_acc, r_acc = doc.get('ПлательщикСчет'), doc.get('ПолучательСчет')
-        f_acc = doc.get('СчетФайла')
-
-        p_name_raw = get_doc_party_name(doc, 'Плательщик')
-        r_name_raw = get_doc_party_name(doc, 'Получатель')
-
         is_p_ours = p_acc in our_accounts
         is_r_ours = r_acc in our_accounts
 
+        # Фильтрация: пропускаем транзакции без наших организаций
         if not (is_p_ours or is_r_ours):
             logger.debug(f"{log_prefix} SKIP (Не наша транзакция)")
             skipped_no_our_org += 1
             continue
 
+        # Фильтрация: пропускаем внутренние переводы
         if is_p_ours and is_r_ours:
             logger.debug(f"{log_prefix} SKIP (Внутренний перевод): {p_acc} -> {r_acc}")
             skipped_internal += 1
             continue
 
-        type, our_details, our_acc = None, None, None
-        cp_raw, cp_inn, cp_acc = None, None, None
+        # Определяем тип операции и участников
+        type, our_acc, cp_raw, cp_inn, cp_acc, _ = _determine_transaction_type_and_parties(doc, our_accounts)
+        
+        if not type:
+            logger.warning(f"{log_prefix} SKIP (Несоответствие счета файла): Не удалось определить тип. "
+                          f"Файл={doc.get('СчетФайла')}, Плат={p_acc}({is_p_ours}), Пол={r_acc}({is_r_ours}).")
+            skipped_mismatch += 1
+            continue
 
-        if p_acc == f_acc and is_p_ours:
-            type, our_acc = 'expense', p_acc
-            our_details = our_orgs_map.get(our_acc)
-            cp_raw, cp_inn, cp_acc = r_name_raw, doc.get('ПолучательИНН',''), r_acc
-        elif r_acc == f_acc and is_r_ours:
-            type, our_acc = 'income', r_acc
-            our_details = our_orgs_map.get(our_acc)
-            cp_raw, cp_inn, cp_acc = p_name_raw, doc.get('ПлательщикИНН',''), p_acc
-        else:
-            if is_p_ours and not is_r_ours:
-                 type, our_acc = 'expense', p_acc
-                 our_details = our_orgs_map.get(our_acc)
-                 cp_raw, cp_inn, cp_acc = r_name_raw, doc.get('ПолучательИНН',''), r_acc
-                 logger.debug(f"{log_prefix} INFO (Счет файла не совпал): Мы плательщик ({p_acc}), тип 'expense'.")
-            elif is_r_ours and not is_p_ours:
-                 type, our_acc = 'income', r_acc
-                 our_details = our_orgs_map.get(our_acc)
-                 cp_raw, cp_inn, cp_acc = p_name_raw, doc.get('ПлательщикИНН',''), p_acc
-                 logger.debug(f"{log_prefix} INFO (Счет файла не совпал): Мы получатель ({r_acc}), тип 'income'.")
-            else:
-                 logger.warning(f"{log_prefix} SKIP (Несоответствие счета файла): Не удалось определить тип. "
-                                f"Файл={f_acc}, Плат={p_acc}({is_p_ours}), Пол={r_acc}({is_r_ours}).")
-                 skipped_mismatch += 1
-                 continue
-
+        # Получаем детали нашей организации
+        our_details = our_orgs_map.get(our_acc)
         if not our_details:
             logger.error(f"{log_prefix} SKIP (Ошибка: детали нашей организации): Нет данных для счета {our_acc}. Контрагент: '{cp_raw[:50]}...'")
             skipped_details_missing += 1
             continue
 
+        # Проверяем наличие имени контрагента
         if not cp_raw or cp_raw == '?':
             logger.warning(f"{log_prefix} SKIP (Нет имени контрагента): Тип={type}, ИНН КА={cp_inn}, Счет КА={cp_acc}.")
             skipped_no_cp_name += 1
             continue
 
+        # Валидация даты и суммы
         date_field = 'ДатаСписано' if type == 'expense' else 'ДатаПоступило'
         date_str = doc.get(date_field) or doc.get('Дата')
         date_oper = parse_date(date_str)
@@ -233,52 +293,18 @@ def process_documents(all_documents: List[Dict], our_orgs_map: Dict[str, Dict]) 
 
         processed_count += 1
 
-        cp_inn_clean = cp_inn.strip() if cp_inn else ''
-        cp_acc_clean = cp_acc.strip() if cp_acc else ''
-        cp_norm, cp_legal_form, cp_raw_original = normalize_and_classify(cp_raw, cp_inn_clean)
-
-        if DEBUG_MODE:
-            DEBUG_NAMES_LIST.append({
-                'original': cp_raw_original or "?",
-                'normalized': cp_norm or '?',
-                'form': cp_legal_form,
-                'inn': cp_inn_clean})
-
-        if cp_inn_clean and cp_inn_clean != '0':
-            cp_id = f"INN:{cp_inn_clean}"
-        else:
-            name_part_for_id = "?"
-            if cp_norm and cp_norm != '?': name_part_for_id = cp_norm.upper()
-            elif cp_raw_original and cp_raw_original != '?': name_part_for_id = cp_raw_original.upper()
-            else: name_part_for_id = "БЕЗ_ИМЕНИ"
-            acc_part = cp_acc_clean if cp_acc_clean else "БЕЗ_СЧЕТА"
-            cp_id = f"NAME_ACC:{name_part_for_id}|{acc_part}"
-
-        display_name_hint = None
-        if cp_norm and cp_norm != '?' and cp_legal_form in ['ИП', 'ФЛ']:
-            display_name_hint = format_fio_display(cp_norm)
-
-        transaction_data = {
-            'our_org_normalized': our_details.get('normalized', '?'),
-            'our_org_original': our_details.get('name', '?'),
-            'our_account': our_acc,
-            'type': type,
-            'cp_id': cp_id,
-            'cp_name_raw': cp_raw_original or "?",
-            'cp_name_normalized': cp_norm or "?",
-            'cp_display_name_hint': display_name_hint,
-            'cp_legal_form': cp_legal_form,
-            'cp_inn': cp_inn_clean,
-            'cp_account': cp_acc_clean,
-            'date': date_oper.strftime('%Y-%m-%d'),
-            'year': date_oper.year,
-            'amount': amount,
-            'doc_number': doc.get('Номер', ''),
-            'purpose': doc.get('НазначениеПлатежа', '')
-        }
+        # Создаем структуру данных транзакции
+        transaction_data = _create_transaction_data(doc, our_details, our_acc, type, cp_raw, cp_inn, cp_acc)
         processed.append(transaction_data)
 
+        # Отладочная информация
         if DEBUG_MODE:
+            DEBUG_NAMES_LIST.append({
+                'original': transaction_data['cp_name_raw'],
+                'normalized': transaction_data['cp_name_normalized'],
+                'form': transaction_data['cp_legal_form'],
+                'inn': transaction_data['cp_inn']
+            })
             DEBUG_TRANSACTIONS_LIST.append({
                 **transaction_data,
                 '_doc_index': doc_index + 1,
@@ -305,8 +331,13 @@ def process_documents(all_documents: List[Dict], our_orgs_map: Dict[str, Dict]) 
 # --- Функции debug_save_names и debug_save_processed_transactions ---
 # Вызываются только из __main__ при DEBUG_MODE=True
 
-def debug_save_names(output_dir: str):
-    """Сохраняет отладочную информацию по нормализации имен в CSV (только в DEBUG_MODE)."""
+def debug_save_names(output_dir: str) -> None:
+    """
+    Сохраняет отладочную информацию по нормализации имен в CSV (только в DEBUG_MODE).
+    
+    Args:
+        output_dir: Путь к папке для сохранения файла
+    """
     if not DEBUG_MODE: return
     filepath = os.path.join(output_dir, DEBUG_NAMES_FILENAME)
     if not DEBUG_NAMES_LIST:
@@ -342,10 +373,14 @@ def debug_save_names(output_dir: str):
     except Exception as e:
         logger.error(f"Ошибка сохранения отладочного файла имен '{filepath}': {e}", exc_info=True)
 
-def debug_save_processed_transactions(output_dir: str, name_filter: Optional[str] = None):
+def debug_save_processed_transactions(output_dir: str, name_filter: Optional[str] = None) -> None:
     """
     Сохраняет обработанные транзакции в CSV (только в DEBUG_MODE).
     Может фильтровать по имени контрагента.
+    
+    Args:
+        output_dir: Путь к папке для сохранения файла
+        name_filter: Опциональный фильтр по имени контрагента
     """
     if not DEBUG_MODE: return
     filepath = os.path.join(output_dir, DEBUG_TRANSACTIONS_FILENAME)

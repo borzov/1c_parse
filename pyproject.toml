@@ -1,0 +1,64 @@
+[project]
+name = "1c_parse"
+version = "1.0.0"
+description = "Анализатор банковских выписок в формате 1С"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "Jinja2>=3.0.0",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/1c_parse"]
+
+[project.scripts]
+1c_parse = "src.__main__:run_analysis"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "isort>=5.12.0",
+    "pre-commit>=3.0.0",
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+line_length = 88
+known_first_party = ["src"]
+
+[tool.flake8]
+max-line-length = 88
+extend-ignore = ["E203", "W503"]
+exclude = [
+    ".git",
+    "__pycache__",
+    ".venv",
+    "venv",
+    "build",
+    "dist",
+]

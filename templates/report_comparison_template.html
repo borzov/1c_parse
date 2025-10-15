@@ -3,11 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Отчет: Взаимодействие Контрагентов v6.1</title> {# Версия обновлена #}
+    <title>Отчет: Взаимодействие Контрагентов</title>
     <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@latest/css/pico.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: sans-serif; padding-bottom: 50px; font-size: 0.9em; }
+        .container { font-size: 0.9em; }
         .container { max-width: 97%; margin: auto; padding: 15px; }
         #filtersContainer { background-color: #f8f9fa; border: 1px solid #dee2e6; border-radius: 5px; padding: 15px 20px; margin-bottom: 1.5em; display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px 25px; }
         .filter-group legend { font-weight: bold; margin-bottom: 10px; font-size: 1.05em; display: block; }
@@ -28,12 +30,158 @@
         .legend { line-height: 1.8; margin-top: 1.5rem; border-top: 1px solid #eee; padding-top: 1rem; }
         .legend span { display: inline-block; width: 1.5em; text-align: center; margin-right: 5px;}
         .cp-name-display { font-weight: bold; }
+        
+        /* Модальное окно */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        .modal-content {
+            background-color: #fefefe;
+            margin: 5% auto;
+            padding: 20px;
+            border: none;
+            border-radius: 8px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        .modal-title {
+            font-size: 1.3em;
+            font-weight: bold;
+            margin: 0;
+        }
+        .close {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            line-height: 1;
+        }
+        .close:hover { color: #000; }
+        .modal-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .modal-stat {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 6px;
+            text-align: center;
+        }
+        .modal-stat-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            font-family: monospace;
+        }
+        .modal-stat-label {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 5px;
+        }
+        .modal-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+        .modal-table th,
+        .modal-table td {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            text-align: left;
+        }
+        .modal-table th {
+            background-color: #f5f5f5;
+            font-weight: 600;
+        }
+        .modal-table tr:nth-child(even) {
+            background-color: #f9f9f9;
+        }
+        
+        /* Тепловая карта */
+        .heatmap-cell {
+            transition: background-color 0.3s ease;
+        }
+        .heatmap-low { background-color: #e8f5e8; }
+        .heatmap-medium { background-color: #c8e6c9; }
+        .heatmap-high { background-color: #a5d6a7; }
+        .heatmap-very-high { background-color: #81c784; }
+        
+        /* Секция графиков */
+        .charts-section {
+            background: #f8f9fa;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 18px;
+        }
+        .charts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 20px;
+        }
+        .chart-container {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 6px;
+            padding: 15px;
+            text-align: center;
+        }
+        .chart-container h3 {
+            margin: 0 0 15px 0;
+            font-size: 1.1em;
+            color: #333;
+        }
+        .chart-container canvas {
+            max-width: 100%;
+            height: auto;
+        }
+        
     </style>
 </head>
 <body>
 <main class="container">
     <h1>Отчет: Взаимодействие Контрагентов с Организациями</h1>
     <p>Дата формирования: {{ generation_time }}</p>
+    
+    <!-- Информация -->
+    <div style="margin-bottom: 15px;">
+        <span style="font-size: 0.9em; color: #666;">
+            Кликните на ячейку для просмотра деталей взаимодействия. Тепловая карта включена по умолчанию.
+        </span>
+    </div>
+    
+    <!-- Секция графиков -->
+    <div class="charts-section" id="chartsSection">
+        <div class="charts-grid">
+            <div class="chart-container">
+                <h3>Распределение по ОПФ</h3>
+                <canvas id="legalFormsChart" width="300" height="300"></canvas>
+            </div>
+            <div class="chart-container">
+                <h3>Интенсивность взаимодействий</h3>
+                <canvas id="interactionHeatmapChart" width="400" height="300"></canvas>
+            </div>
+        </div>
+    </div>
 
     <!-- Блок Фильтров -->
      <div id="filtersContainer">
@@ -141,6 +289,22 @@
     {% endif %}
 </main>
 
+<!-- Модальное окно для детализации -->
+<div id="detailModal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 class="modal-title" id="modalTitle">Детали взаимодействия</h2>
+            <span class="close" id="closeModal">&times;</span>
+        </div>
+        <div class="modal-stats" id="modalStats">
+            <!-- Статистика будет добавлена через JavaScript -->
+        </div>
+        <div id="modalContent">
+            <!-- Содержимое будет добавлено через JavaScript -->
+        </div>
+    </div>
+</div>
+
 <script src="https://code.jquery.com/jquery-3.7.0.min.js"></script>
 <script type="text/javascript" src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
 <script>
@@ -149,8 +313,274 @@
 
     // Встроенная русская локализация
     var russianLocalization = { "processing": "Подождите...", "search": "Поиск:", "lengthMenu": "Показать _MENU_ записей", "info": "Записи с _START_ до _END_ из _TOTAL_ записей", "infoEmpty": "Записи с 0 до 0 из 0 записей", "infoFiltered": "(отфильтровано из _MAX_ записей)", "loadingRecords": "Загрузка записей...", "zeroRecords": "Записи отсутствуют.", "emptyTable": "В таблице отсутствуют данные", "paginate": { "first": "Первая", "previous": "Предыдущая", "next": "Следующая", "last": "Последняя" }, "aria": { "sortAscending": ": акт. для сорт. по возрастанию", "sortDescending": ": акт. для сорт. по убыванию" }, "select": { "rows": { "_": "Выбрано: %d", "0": "", "1": "Выбрана 1 запись" } } };
+    
+    // Переменные для тепловой карты
+    var heatmapEnabled = true; // Включена по умолчанию
+    var maxAmount = 0;
+    var minAmount = 0;
+    
+    // Переменные для графиков
+    var legalFormsChart = null;
+    var interactionHeatmapChart = null;
+    
+    // Создание круговой диаграммы по ОПФ
+    function createLegalFormsChart() {
+        const ctx = document.getElementById('legalFormsChart').getContext('2d');
+        
+        const legalFormsData = {};
+        $('#comparisonTable tbody tr').each(function() {
+            const form = $(this).attr('data-legal-form') || 'ДРУГОЕ';
+            if (!legalFormsData[form]) {
+                legalFormsData[form] = 0;
+            }
+            legalFormsData[form]++;
+        });
+        
+        const labels = Object.keys(legalFormsData);
+        const data = Object.values(legalFormsData);
+        const colors = [
+            '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', 
+            '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF'
+        ];
+        
+        if (legalFormsChart) {
+            legalFormsChart.destroy();
+        }
+        
+        legalFormsChart = new Chart(ctx, {
+            type: 'doughnut',
+            data: {
+                labels: labels,
+                datasets: [{
+                    data: data,
+                    backgroundColor: colors.slice(0, labels.length),
+                    borderWidth: 2
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        position: 'bottom',
+                    }
+                }
+            }
+        });
+    }
+    
+    // Создание графика интенсивности взаимодействий
+    function createInteractionHeatmapChart() {
+        const ctx = document.getElementById('interactionHeatmapChart').getContext('2d');
+        
+        const orgNames = [];
+        const interactionData = [];
+        
+        // Собираем данные по организациям
+        $('#comparisonTable thead th').each(function(index) {
+            if (index > 0) { // Пропускаем первую колонку (контрагенты)
+                orgNames.push($(this).text());
+            }
+        });
+        
+        // Считаем общее количество взаимодействий для каждой организации
+        orgNames.forEach((orgName, orgIndex) => {
+            let totalInteractions = 0;
+            $('#comparisonTable tbody tr').each(function() {
+                const cell = $(this).find('td').eq(orgIndex + 1);
+                const title = cell.attr('title');
+                if (title && title !== `${orgName}: Нет операций`) {
+                    // Парсим количество операций из title
+                    const match = title.match(/(\d+)\s*шт/g);
+                    if (match) {
+                        match.forEach(m => {
+                            const count = parseInt(m.match(/\d+/)[0]);
+                            totalInteractions += count;
+                        });
+                    }
+                }
+            });
+            interactionData.push(totalInteractions);
+        });
+        
+        if (interactionHeatmapChart) {
+            interactionHeatmapChart.destroy();
+        }
+        
+        interactionHeatmapChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: orgNames,
+                datasets: [{
+                    label: 'Количество операций',
+                    data: interactionData,
+                    backgroundColor: '#4BC0C0',
+                    borderColor: '#4BC0C0',
+                    borderWidth: 1
+                }]
+            },
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: {
+                        display: false
+                    }
+                },
+                scales: {
+                    y: {
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+    
+    // Сохранение состояния фильтров
+    function saveFilterState() {
+        const state = {
+            legalForms: [],
+            hasIncome: $('input[name="hasIncome"]').is(':checked'),
+            hasExpense: $('input[name="hasExpense"]').is(':checked'),
+            onlyWithOrg: $('input[name="onlyWithOrg"]:checked').val()
+        };
+        
+        $('input[name="legalForm"]:checked').each(function() {
+            state.legalForms.push($(this).val());
+        });
+        
+        localStorage.setItem('comparisonReportFilters', JSON.stringify(state));
+    }
+    
+    function loadFilterState() {
+        const saved = localStorage.getItem('comparisonReportFilters');
+        if (saved) {
+            try {
+                const state = JSON.parse(saved);
+                
+                // Восстанавливаем чекбоксы ОПФ
+                $('input[name="legalForm"]').prop('checked', false);
+                state.legalForms.forEach(function(form) {
+                    $(`input[name="legalForm"][value="${form}"]`).prop('checked', true);
+                });
+                
+                // Восстанавливаем остальные фильтры
+                $('input[name="hasIncome"]').prop('checked', state.hasIncome);
+                $('input[name="hasExpense"]').prop('checked', state.hasExpense);
+                $(`input[name="onlyWithOrg"][value="${state.onlyWithOrg}"]`).prop('checked', true);
+                
+            } catch (e) {
+                console.warn('Ошибка загрузки состояния фильтров:', e);
+            }
+        }
+    }
+    
+    // Функция для показа модального окна
+    function showDetailModal(cpName, orgName, interaction) {
+        $('#modalTitle').text(`Взаимодействие: ${cpName} ↔ ${orgName}`);
+        
+        // Статистика
+        let statsHtml = '';
+        if (interaction) {
+            let totalAmount = (interaction.income_sum || 0) + (interaction.expense_sum || 0);
+            let totalCount = (interaction.income_count || 0) + (interaction.expense_count || 0);
+            
+            statsHtml = `
+                <div class="modal-stat">
+                    <div class="modal-stat-value income">${formatCurrency(interaction.income_sum || 0)}</div>
+                    <div class="modal-stat-label">Приход</div>
+                </div>
+                <div class="modal-stat">
+                    <div class="modal-stat-value expense">${formatCurrency(interaction.expense_sum || 0)}</div>
+                    <div class="modal-stat-label">Расход</div>
+                </div>
+                <div class="modal-stat">
+                    <div class="modal-stat-value">${formatCurrency(totalAmount)}</div>
+                    <div class="modal-stat-label">Общая сумма</div>
+                </div>
+                <div class="modal-stat">
+                    <div class="modal-stat-value">${totalCount}</div>
+                    <div class="modal-stat-label">Операций</div>
+                </div>
+            `;
+        } else {
+            statsHtml = '<div class="modal-stat"><div class="modal-stat-value">Нет данных</div><div class="modal-stat-label">Взаимодействие отсутствует</div></div>';
+        }
+        $('#modalStats').html(statsHtml);
+        
+        // Детальная таблица (пока упрощенная)
+        let contentHtml = '<p>Детальная информация о взаимодействии будет добавлена в следующих версиях.</p>';
+        $('#modalContent').html(contentHtml);
+        
+        $('#detailModal').show();
+    }
+    
+    // Функция для расчета тепловой карты
+    function calculateHeatmap() {
+        if (!heatmapEnabled) return;
+        
+        let amounts = [];
+        $('#comparisonTable tbody tr').each(function() {
+            $(this).find('td.interaction-cell').each(function() {
+                let title = $(this).attr('title');
+                if (title && title.includes('руб.')) {
+                    let match = title.match(/(\d+(?:[.,]\d+)*)/g);
+                    if (match) {
+                        match.forEach(function(amountStr) {
+                            let amount = parseFloat(amountStr.replace(',', '.'));
+                            if (!isNaN(amount)) amounts.push(amount);
+                        });
+                    }
+                }
+            });
+        });
+        
+        if (amounts.length > 0) {
+            maxAmount = Math.max(...amounts);
+            minAmount = Math.min(...amounts);
+        }
+    }
+    
+    // Функция для применения тепловой карты
+    function applyHeatmap() {
+        if (!heatmapEnabled) {
+            $('#comparisonTable tbody tr').each(function() {
+                $(this).find('td.interaction-cell').removeClass('heatmap-low heatmap-medium heatmap-high heatmap-very-high');
+            });
+            return;
+        }
+        
+        $('#comparisonTable tbody tr').each(function() {
+            $(this).find('td.interaction-cell').each(function() {
+                let title = $(this).attr('title');
+                if (title && title.includes('руб.')) {
+                    let match = title.match(/(\d+(?:[.,]\d+)*)/g);
+                    if (match) {
+                        let maxAmountInCell = 0;
+                        match.forEach(function(amountStr) {
+                            let amount = parseFloat(amountStr.replace(',', '.'));
+                            if (!isNaN(amount) && amount > maxAmountInCell) {
+                                maxAmountInCell = amount;
+                            }
+                        });
+                        
+                        if (maxAmountInCell > 0) {
+                            let ratio = (maxAmountInCell - minAmount) / (maxAmount - minAmount);
+                            $(this).removeClass('heatmap-low heatmap-medium heatmap-high heatmap-very-high');
+                            
+                            if (ratio < 0.25) $(this).addClass('heatmap-low');
+                            else if (ratio < 0.5) $(this).addClass('heatmap-medium');
+                            else if (ratio < 0.75) $(this).addClass('heatmap-high');
+                            else $(this).addClass('heatmap-very-high');
+                        }
+                    }
+                }
+            });
+        });
+    }
 
     $(document).ready(function() {
+        // Инициализация состояния
+        loadFilterState();
+        
         try {
             var table = $('#comparisonTable').DataTable({
                 "language": russianLocalization,
@@ -212,8 +642,12 @@
                      else { if ($('input[name="legalForm"]:checked:not([value=ALL])').length === 0) { $('input[name="legalForm"][value="ALL"]').prop('checked', true); } }
                  }
                  applyFilters();
+                 saveFilterState();
             });
-            $('input[name="hasIncome"], input[name="hasExpense"], input[name="onlyWithOrg"]').on('change', applyFilters);
+            $('input[name="hasIncome"], input[name="hasExpense"], input[name="onlyWithOrg"]').on('change', function() {
+                applyFilters();
+                saveFilterState();
+            });
 
             // Кастомная функция фильтрации DataTables
             $.fn.dataTable.ext.search.push( function( settings, data, dataIndex ) {
@@ -260,6 +694,74 @@
 
             // Первоначальное применение фильтров (покажет все строки)
             applyFilters();
+            
+            // Обработчики для модального окна
+            $('#closeModal').on('click', function() {
+                $('#detailModal').hide();
+            });
+            
+            $(window).on('click', function(event) {
+                if (event.target.id === 'detailModal') {
+                    $('#detailModal').hide();
+                }
+            });
+            
+            // Обработчик клика по ячейкам взаимодействия
+            $('#comparisonTable tbody').on('click', 'td.interaction-cell', function() {
+                let row = $(this).closest('tr');
+                let cpName = row.find('td:first-child .cp-name-display').text();
+                let orgName = $(this).closest('table').find('thead th').eq($(this).index()).text();
+                let title = $(this).attr('title');
+                
+                // Парсим данные из title для упрощенного отображения
+                let interaction = null;
+                if (title && title !== `${orgName}: Нет операций`) {
+                    interaction = {
+                        income_sum: 0,
+                        expense_sum: 0,
+                        income_count: 0,
+                        expense_count: 0
+                    };
+                    
+                    // Простой парсинг из title
+                    if (title.includes('Приход:')) {
+                        let incomeMatch = title.match(/Приход:\s*(\d+)\s*шт,\s*([\d\s,]+)\s*руб/);
+                        if (incomeMatch) {
+                            interaction.income_count = parseInt(incomeMatch[1]);
+                            interaction.income_sum = parseFloat(incomeMatch[2].replace(/\s/g, '').replace(',', '.'));
+                        }
+                    }
+                    
+                    if (title.includes('Расход:')) {
+                        let expenseMatch = title.match(/Расход:\s*(\d+)\s*шт,\s*([\d\s,]+)\s*руб/);
+                        if (expenseMatch) {
+                            interaction.expense_count = parseInt(expenseMatch[1]);
+                            interaction.expense_sum = parseFloat(expenseMatch[2].replace(/\s/g, '').replace(',', '.'));
+                        }
+                    }
+                }
+                
+                showDetailModal(cpName, orgName, interaction);
+            });
+            
+            // Инициализируем тепловую карту сразу
+            calculateHeatmap();
+            applyHeatmap();
+            
+            // Инициализируем графики
+            createLegalFormsChart();
+            createInteractionHeatmapChart();
+            
+            // Применяем тепловую карту при изменении фильтров
+            table.on('draw', function() {
+                if (heatmapEnabled) {
+                    calculateHeatmap();
+                    applyHeatmap();
+                }
+                // Обновляем графики
+                createLegalFormsChart();
+                createInteractionHeatmapChart();
+            });
 
         } catch (e) {
              console.error("Ошибка при инициализации DataTables:", e);

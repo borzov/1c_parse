@@ -2,11 +2,11 @@
 import re
 from datetime import datetime
 from collections import Counter
-from typing import Optional, Counter as TypingCounter
+from typing import Optional, Counter as TypingCounter, Union, Dict
 
 # --- Вспомогательные функции общего назначения ---
 
-def safe_float(value_str) -> float:
+def safe_float(value_str: Union[str, int, float, None]) -> float:
     """Безопасное преобразование строки в float."""
     if not value_str: return 0.0
     try:
@@ -25,7 +25,7 @@ def parse_date(date_str: Optional[str]) -> Optional[datetime]:
             pass
     return None
 
-def format_currency(amount: Optional[float]) -> str:
+def format_currency(amount: Union[float, int, None]) -> str:
     """Форматирует число как валюту с неразрывным пробелом и запятой."""
     if amount is None: return "0,00"
     try:
@@ -45,7 +45,7 @@ def get_best_name(names_counter: Optional[TypingCounter[str]], default_prefix: s
     sorted_names = sorted(valid_names.items(), key=lambda item: (-item[1], -len(item[0])))
     return sorted_names[0][0]
 
-def get_doc_party_name(doc: dict, party_type: str) -> str:
+def get_doc_party_name(doc: Dict[str, str], party_type: str) -> str:
     """
     Извлекает имя Плательщика или Получателя из документа 1С,
     проверяя поля N и N1. Возвращает пустую строку, если не найдено.

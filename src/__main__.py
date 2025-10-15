@@ -15,7 +15,7 @@ from src.processing import (
     detect_organizations, process_documents,
     debug_save_names, debug_save_processed_transactions
 )
-from src.reporting import generate_counterparty_annual_report_v5, generate_org_comparison_report_v5
+from src.reporting import generate_counterparty_annual_report, generate_org_comparison_report
 
 # --- Парсинг аргументов ---
 parser = argparse.ArgumentParser(description="Анализатор выписок 1С и генератор отчетов.")
@@ -119,14 +119,18 @@ def run_analysis():
     parsed_files_data = []
     files_processed_count, files_error_count = 0, 0
     try:
-        all_files = [f for f in os.listdir(DATA_DIR) if f.lower().endswith('.txt')]
+        all_files = []
+        for root, dirs, files in os.walk(DATA_DIR):
+            for f in files:
+                if f.lower().endswith('.txt'):
+                    all_files.append(os.path.join(root, f))
         total_files = len(all_files)
-        logger.info(f"Найдено {total_files} .txt файлов в '{DATA_DIR}'. Начинаем парсинг...")
+        logger.info(f"Найдено {total_files} .txt файлов в '{DATA_DIR}' и подпапках. Начинаем парсинг...")
     except Exception as e:
         logger.error(f"Ошибка при чтении содержимого папки '{DATA_DIR}': {e}", exc_info=DEBUG_MODE); sys.exit(1)
 
-    for i, filename in enumerate(all_files):
-        filepath = os.path.join(DATA_DIR, filename)
+    for i, filepath in enumerate(all_files):
+        filename = os.path.relpath(filepath, DATA_DIR)
         logger.debug(f"Парсинг файла [{i+1}/{total_files}]: {filename}")
         try:
             header, docs = parse_1c_file(filepath)
@@ -187,9 +191,9 @@ def run_analysis():
         logger.warning("Нет значащих транзакций для анализа. Генерируются пустые отчеты.")
         try:
             report1_path = os.path.join(OUTPUT_DIR, REPORT_1_FILENAME)
-            generate_counterparty_annual_report_v5([], detected_organizations_map, report1_path)
+            generate_counterparty_annual_report([], detected_organizations_map, report1_path)
             report2_path = os.path.join(OUTPUT_DIR, REPORT_2_FILENAME)
-            generate_org_comparison_report_v5([], detected_organizations_map, report2_path)
+            generate_org_comparison_report([], detected_organizations_map, report2_path)
             logger.info("Пустые отчеты созданы.")
         except Exception as e:
             logger.error(f"Ошибка при генерации пустых отчетов: {e}", exc_info=DEBUG_MODE)
@@ -199,11 +203,11 @@ def run_analysis():
     try:
         report1_path = os.path.join(OUTPUT_DIR, REPORT_1_FILENAME)
         logger.info(f" -> {REPORT_1_FILENAME}")
-        generate_counterparty_annual_report_v5(processed_transactions, detected_organizations_map, report1_path)
+        generate_counterparty_annual_report(processed_transactions, detected_organizations_map, report1_path)
 
         report2_path = os.path.join(OUTPUT_DIR, REPORT_2_FILENAME)
         logger.info(f" -> {REPORT_2_FILENAME}")
-        generate_org_comparison_report_v5(processed_transactions, detected_organizations_map, report2_path)
+        generate_org_comparison_report(processed_transactions, detected_organizations_map, report2_path)
         logger.info(f"Отчеты сохранены в папку: {OUTPUT_DIR}")
     except Exception as e:
         logger.error(f"Критическая ошибка при генерации отчетов: {e}", exc_info=DEBUG_MODE)
